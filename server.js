@@ -5,6 +5,7 @@ require('dotenv').config();
 
 const app = express();
 
+// Middleware
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
@@ -19,20 +20,176 @@ const db = mysql.createPool({
   connectionLimit: 10,
 });
 
-// Test Database Connection
+// Test Connection & Auto-Create Tables with InnoDB & Default Values
 db.getConnection((err, conn) => {
   if (err) {
     console.error('❌ Database connection failed:', err.message);
   } else {
     console.log('✅ Connected to Hostinger MySQL Database!');
+
+    // 1. Ensure `customers` table exists with proper auto-increment & default values
+    const createCustomersTable = `
+      CREATE TABLE IF NOT EXISTS customers (
+        id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL DEFAULT '',
+        phone VARCHAR(50) NOT NULL DEFAULT '',
+        email VARCHAR(255) NOT NULL DEFAULT '',
+        address TEXT NULL,
+        gst_number VARCHAR(100) NOT NULL DEFAULT '',
+        notes TEXT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `;
+
+    // 2. Ensure `quotations` table exists
+    const createQuotationsTable = `
+      CREATE TABLE IF NOT EXISTS quotations (
+        id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        quotation_number VARCHAR(100),
+        customer_name VARCHAR(255),
+        total_cft DECIMAL(12, 3) DEFAULT 0.000,
+        total_amount DECIMAL(12, 2) DEFAULT 0.00,
+        full_data LONGTEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `;
+
+    conn.query(createCustomersTable, (tblErr) => {
+      if (tblErr) console.error('❌ Error verifying customers table:', tblErr.message);
+      else console.log('✅ Customers database table ready!');
+    });
+
+    conn.query(createQuotationsTable, (tblErr) => {
+      if (tblErr) console.error('❌ Error verifying quotations table:', tblErr.message);
+      else console.log('✅ Quotations database table ready!');
+    });
+
     conn.release();
   }
 });
 
+/* ==========================================================================
+   CUSTOMER API ENDPOINTS
+   ========================================================================== */
+
+// 1. Get all customers
+app.get('/api/customers', (req, res) => {
+  db.query('SELECT * FROM customers ORDER BY id DESC', (err, results) => {
+    if (err) return res.status(500).json({ message: err.message });
+    const formatted = results.map((row) => ({
+      id: row.id,
+      name: row.name || '',
+      phone: row.phone || '',
+      email: row.email || '',
+      address: row.address || '',
+      gstNumber: row.gst_number || '',
+      notes: row.notes || '',
+      createdAt: row.created_at
+    }));
+    res.json(formatted);
+  });
+});
+
+// 2. Get single customer by ID
+app.get('/api/customers/:id', (req, res) => {
+  const { id } = req.params;
+  db.query('SELECT * FROM customers WHERE id = ?', [id], (err, results) => {
+    if (err) return res.status(500).json({ message: err.message });
+    if (results.length === 0) return res.status(404).json({ message: 'Customer not found' });
+    const row = results[0];
+    res.json({
+      id: row.id,
+      name: row.name || '',
+      phone: row.phone || '',
+      email: row.email || '',
+      address: row.address || '',
+      gstNumber: row.gst_number || '',
+      notes: row.notes || '',
+      createdAt: row.created_at
+    });
+  });
+});
+
+// 3. Add new customer (Safe string sanitization)
+app.post('/api/customers', (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    const phone = String(req.body.phone || '').trim();
+    const email = String(req.body.email || '').trim();
+    const address = String(req.body.address || '').trim();
+    const gst_number = String(req.body.gstNumber || req.body.gst_number || '').trim();
+    const notes = String(req.body.notes || '').trim();
+
+    if (!name) {
+      return res.status(400).json({ message: 'Customer name is required' });
+    }
+
+    const sql = `
+      INSERT INTO customers (name, phone, email, address, gst_number, notes)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `;
+
+    db.query(sql, [name, phone, email, address, gst_number, notes], (err, result) => {
+      if (err) {
+        console.error('❌ MySQL INSERT Error:', err.message);
+        return res.status(500).json({ message: err.message });
+      }
+
+      return res.status(201).json({
+        id: result.insertId,
+        name,
+        phone,
+        email,
+        address,
+        gstNumber: gst_number,
+        notes
+      });
+    });
+  } catch (error) {
+    console.error('❌ Exception in POST /api/customers:', error);
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+// 4. Update customer
+app.put('/api/customers/:id', (req, res) => {
+  const { id } = req.params;
+  const name = String(req.body.name || '').trim();
+  const phone = String(req.body.phone || '').trim();
+  const email = String(req.body.email || '').trim();
+  const address = String(req.body.address || '').trim();
+  const gst_number = String(req.body.gstNumber || req.body.gst_number || '').trim();
+  const notes = String(req.body.notes || '').trim();
+
+  const sql = `
+    UPDATE customers 
+    SET name = ?, phone = ?, email = ?, address = ?, gst_number = ?, notes = ? 
+    WHERE id = ?
+  `;
+
+  db.query(sql, [name, phone, email, address, gst_number, notes, id], (err) => {
+    if (err) return res.status(500).json({ message: err.message });
+    res.json({ message: 'Customer updated successfully!', id });
+  });
+});
+
+// 5. Delete customer
+app.delete('/api/customers/:id', (req, res) => {
+  const { id } = req.params;
+  db.query('DELETE FROM customers WHERE id = ?', [id], (err) => {
+    if (err) return res.status(500).json({ message: err.message });
+    res.json({ message: 'Customer deleted successfully!' });
+  });
+});
+
+/* ==========================================================================
+   QUOTATION API ENDPOINTS
+   ========================================================================== */
+
 // 1. Get all quotations
 app.get('/api/quotations', (req, res) => {
   db.query('SELECT * FROM quotations ORDER BY id DESC', (err, results) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ message: err.message });
 
     const formatted = results.map((row) => {
       let parsed = {};
@@ -67,9 +224,8 @@ app.get('/api/quotations', (req, res) => {
 app.get('/api/quotations/:id', (req, res) => {
   const { id } = req.params;
   db.query('SELECT * FROM quotations WHERE id = ?', [id], (err, results) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (results.length === 0)
-      return res.status(404).json({ error: 'Quotation not found' });
+    if (err) return res.status(500).json({ message: err.message });
+    if (results.length === 0) return res.status(404).json({ message: 'Quotation not found' });
 
     const row = results[0];
     let parsed = {};
@@ -100,7 +256,7 @@ app.get('/api/quotations/:id', (req, res) => {
   });
 });
 
-// 3. Create a new quotation
+// 3. Create new quotation
 app.post('/api/quotations', (req, res) => {
   const { quotationNumber, customerName, totalCft, totalAmount, fullData } = req.body;
   const sql =
@@ -110,15 +266,15 @@ app.post('/api/quotations', (req, res) => {
 
   db.query(
     sql,
-    [quotationNumber, customerName, totalCft, totalAmount, fullDataJson],
+    [quotationNumber, customerName, totalCft || 0, totalAmount || 0, fullDataJson],
     (err, result) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ message: err.message });
       res.status(201).json({ message: 'Quotation saved!', id: result.insertId });
     }
   );
 });
 
-// 4. Update an existing quotation
+// 4. Update quotation
 app.put('/api/quotations/:id', (req, res) => {
   const { id } = req.params;
   const { customerName, totalCft, totalAmount, fullData } = req.body;
@@ -129,23 +285,24 @@ app.put('/api/quotations/:id', (req, res) => {
 
   db.query(
     sql,
-    [customerName, totalCft, totalAmount, fullDataJson, id],
-    (err, result) => {
-      if (err) return res.status(500).json({ error: err.message });
+    [customerName, totalCft || 0, totalAmount || 0, fullDataJson, id],
+    (err) => {
+      if (err) return res.status(500).json({ message: err.message });
       res.json({ message: 'Quotation updated successfully!' });
     }
   );
 });
 
-// 5. Delete a quotation
+// 5. Delete quotation
 app.delete('/api/quotations/:id', (req, res) => {
   const { id } = req.params;
-  db.query('DELETE FROM quotations WHERE id = ?', [id], (err, result) => {
-    if (err) return res.status(500).json({ error: err.message });
+  db.query('DELETE FROM quotations WHERE id = ?', [id], (err) => {
+    if (err) return res.status(500).json({ message: err.message });
     res.json({ message: 'Quotation deleted successfully!' });
   });
 });
 
+// Start Server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Backend Server running on http://localhost:${PORT}`);
