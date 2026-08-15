@@ -5,29 +5,51 @@ require('dotenv').config();
 
 const app = express();
 
-// Middleware
-app.use(cors());
+// 1. CORS Configuration (Allows frontend access)
+app.use(
+  cors({
+    origin: [
+      'https://timber.smtdoorindustries.com',
+      'https://api.smtdoorindustries.com',
+      'http://localhost:5173',
+      'http://localhost:3000'
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  })
+);
+
 app.use(express.json({ limit: '10mb' }));
 
-// MySQL Connection Setup
+// 2. Base Health Check Route (Prevents "Cannot GET /")
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'online',
+    message: 'SMT Timber Backend API is running successfully on Hostinger!'
+  });
+});
+
+// 3. MySQL Connection Pool with Keep-Alive
 const db = mysql.createPool({
-  host: process.env.DB_HOST,
+  host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER,
   password: process.env.DB_PASS,
   database: process.env.DB_NAME,
   port: 3306,
   waitForConnections: true,
   connectionLimit: 10,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000
 });
 
-// Test Connection & Auto-Create Tables with InnoDB & Default Values
+// Auto-create database tables
 db.getConnection((err, conn) => {
   if (err) {
     console.error('❌ Database connection failed:', err.message);
   } else {
     console.log('✅ Connected to Hostinger MySQL Database!');
 
-    // 1. Ensure `customers` table exists with proper auto-increment & default values
     const createCustomersTable = `
       CREATE TABLE IF NOT EXISTS customers (
         id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -41,7 +63,6 @@ db.getConnection((err, conn) => {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `;
 
-    // 2. Ensure `quotations` table exists
     const createQuotationsTable = `
       CREATE TABLE IF NOT EXISTS quotations (
         id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -56,12 +77,12 @@ db.getConnection((err, conn) => {
 
     conn.query(createCustomersTable, (tblErr) => {
       if (tblErr) console.error('❌ Error verifying customers table:', tblErr.message);
-      else console.log('✅ Customers database table ready!');
+      else console.log('✅ Customers table ready!');
     });
 
     conn.query(createQuotationsTable, (tblErr) => {
       if (tblErr) console.error('❌ Error verifying quotations table:', tblErr.message);
-      else console.log('✅ Quotations database table ready!');
+      else console.log('✅ Quotations table ready!');
     });
 
     conn.release();
@@ -110,7 +131,7 @@ app.get('/api/customers/:id', (req, res) => {
   });
 });
 
-// 3. Add new customer (Safe string sanitization)
+// 3. Add new customer
 app.post('/api/customers', (req, res) => {
   try {
     const name = String(req.body.name || '').trim();
@@ -212,7 +233,7 @@ app.get('/api/quotations', (req, res) => {
         customerSnapshot: parsed.customerSnapshot || { name: row.customer_name },
         totalCFT: parseFloat(row.total_cft || parsed.totalCFT || 0),
         grandTotal: parseFloat(row.total_amount || parsed.grandTotal || 0),
-        date: row.created_at || parsed.date || new Date().toISOString(),
+        date: row.created_at || parsed.date || new Date().toISOString()
       };
     });
 
@@ -251,7 +272,7 @@ app.get('/api/quotations/:id', (req, res) => {
       grandTotal: parseFloat(row.total_amount || parsed.grandTotal || 0),
       sections: parsed.sections || [],
       additionalCharges: parsed.additionalCharges || [],
-      date: row.created_at || parsed.date || new Date().toISOString(),
+      date: row.created_at || parsed.date || new Date().toISOString()
     });
   });
 });
@@ -303,7 +324,7 @@ app.delete('/api/quotations/:id', (req, res) => {
 });
 
 // Start Server
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Backend Server running on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
